@@ -127,6 +127,7 @@ sub define_layout($) {
 		time => 4,
 		uint => 4,
 		mask => 4,
+		uuid => 16,
 	);
 
 	$layout->{raw} = $layoutstring;
@@ -244,6 +245,7 @@ my %seenflags = (
         '00001700' => 0,
         '01000000' => 0,
         '01000100' => 0,
+        '01000200' => 0,
         '01001000' => 0,
         '01001700' => 0,
         '01001100' => 0,
@@ -254,8 +256,10 @@ my %seenflags = (
         '20000100' => 0,
         '2000ff00' => 0,
         '20002200' => 0,
+        '21000100' => 0,
         '2100ff00' => 0,
         '40040200' => $hdr1+$hdr2,
+        '41040000' => $hdr1+$hdr2,
         '41040200' => $hdr1+$hdr2,
         '41040300' => $hdr1+$hdr2,
         '41040400' => $hdr1+$hdr2,
@@ -292,20 +296,13 @@ sub process_std_header($) {
 	my $flags = unpack('H8',$flags1);
 	$self->{flags} = $flags;
 
-	my ($prehead) = unpack('C',$flags1);
-	my ($FFFF) = unpack('x2C',$flags1);
+	my ($hdr1) = unpack('C',$flags1);
 
-	if ($prehead & 0x40) {
+	if ($hdr1 & 0x40) {
 		$self->{prehead} = 1;
-	} else {
-		$self->{prehead} = 0;
-	}
-
-	if ($FFFF == 0xff) {
-		$self->{FFFF}=0;
-	} elsif ($FFFF & 0x06) {
 		$self->{FFFF}=1;
 	} else {
+		$self->{prehead} = 0;
 		$self->{FFFF}=0;
 	}
 
