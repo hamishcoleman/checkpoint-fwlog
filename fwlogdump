@@ -317,31 +317,6 @@ sub process_std_header($) {
 			($self->{FFFF}?$hdr1:0) + ($self->{prehead}?$hdr2:0);
 	}
 
-#	if ($flags eq '01040200' || $flags eq '01000200' ||
-#	) {
-#		# HACK
-#		print "WARN: HACK NO FF APPLIED\n";
-#		$self->{FFFF}=0;
-#		$self->{hack}++;
-#	}
-#
-#	if ($flags eq '41040000'
-#	) {
-#		# HACK
-#		print "WARN: HACK  2 FF APPLIED\n";
-#		$self->{FFFF}=1;
-#		$self->{hack}++;
-#	}
-#
-#	if ($flags eq '21000000'
-#	) {
-#		# HACK
-#		print "WARN: HACK  2 FF and PREHEAD APPLIED\n";
-#		$self->{FFFF}=1;
-#		$self->{prehead}=1;
-#		$self->{hack}++;
-#	}
-
 	$self->{blocklen} =
 		$self->{headerlen} +
 		$self->{datalen} +
@@ -465,52 +440,6 @@ sub process_block_ffxx($$) {
 		dump_block($self);
 		die("Unknown 0xFFxx Block type $type");
 	}
-}
-
-sub process_block_accept($$) {
-	my ($buf,$store) = @_;
-
-	my $exceptions;
-
-	my ($logsrc,$time1,
-		$interface,$fill1,$fill2,$time2,$fill3,$logsrc2,$fill4,
-		$product,$policy,
-		$src,$sport,$dst,$dport,$proto,$rule,
-		$fill5) = unpack('x4 N N N H8 H16 N H8 N H8 N N a4 N a4 N N N H8',$buf);
-
-	# logsrc
-	# time1		(log time?)
-	# interface
-	if ($fill1 ne '41040200') {
-		$exceptions.='1='.$fill1.' ';
-	}
-	if ($fill2 ne 'ffffffffffffffff') {
-		$exceptions.='2!=f ';
-	}
-	if ($time1 ne $time2) {
-		$exceptions.='t1!=t2 ';
-	}
-	$exceptions.='3='.$fill3.' ';
-	# logsrc2 in host byte order?
-	if ($fill4 ne '000007b6') {
-		$exceptions.="4=$fill4 ";
-	}
-	$exceptions.="p=$product ";
-	$exceptions.="pol=$policy ";
-	if ($fill5 ne 'ffffffff') {
-		$exceptions.='5!=f ';
-	}
-
-	if ($proto == 6) {
-		print "TCP ";
-	} else {
-		print "proto$proto ";
-	}
-	printf "%s:%i -> %s:%i (rule=%i)",inet_ntoa($src),$sport,inet_ntoa($dst),$dport,$rule;
-	print " $exceptions\n";
-
-	#hexdump($buf);
-	#print "\n";
 }
 
 # FIXME - global debugging header
