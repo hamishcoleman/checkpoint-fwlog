@@ -1,0 +1,599 @@
+#!/usr/bin/perl
+use warnings;
+use strict;
+#
+# Attempt to dump a Checkpoing fw.log file as text
+#
+
+our $VERSION=0;
+
+use FileHandle;
+use POSIX qw(strftime);
+use Socket;	# for inet_aton
+
+BEGIN {
+	# allow the dev version of the libraries to be used
+	# when running the script from the src dir
+	my $dir = $0;
+	$dir =~ s%/[^/]+%/%;
+	unshift @INC,$dir;
+}
+
+use HC::Tools;
+
+use Data::Dumper;
+$Data::Dumper::Indent = 1;
+$Data::Dumper::Sortkeys = 1;
+
+my $option={};		# set option defaults here
+my $errorcode=0;
+# remember to update the SYNOPSIS and OPTIONS when this changes
+HC::Tools::options($option,
+	'seek=i',
+	'skipheader!',
+);
+
+sub hexdump(\$) {
+	my ($buf) = @_;
+
+	if (!defined $$buf) {
+		return undef;
+	}
+
+	my $linelast = 'x';
+	my $linethis;
+	my $seenstar;
+
+	my $offset=0;
+	while ($offset<length $$buf) {
+		$linethis = substr($$buf,$offset,16);
+		if ($linethis eq $linelast) {
+			if (!$seenstar) {
+				print "*\n";
+				$seenstar=1;
+			}
+		} else {
+			my @buf16= split //, $linethis;
+			printf('%03x: ',$offset);
+			for my $i (0..15) {
+				if (defined $buf16[$i]) {
+					printf('%02x ',ord($buf16[$i]));
+				} else {
+					printf('   ');
+				}
+
+				# stick a visual separator in the middle
+				if ($i == 7) {
+					print ' ';
+				}
+			}
+			print " |";
+			for my $i (0..15) {
+				my $ch = $buf16[$i];
+				if (!defined $ch) {
+					printf(' ');
+				} elsif (ord($ch)>0x20 && ord($ch)<0x7f) {
+					printf('%s',$ch);
+				} else {
+					printf('.');
+				}
+
+				# stick a visual separator in the middle
+				if ($i == 7) {
+					print ' ';
+				}
+			}
+			print "|\n";
+			$linelast=$linethis;
+			$seenstar=0;
+		}
+		$offset+=16;
+	}
+}
+
+# FIXME - global data store
+my $defs = {};
+
+sub define_string($) {
+	my ($string) = @_;
+
+	push @{$defs->{string}}, $string;
+	my $id = (@{$defs->{string}})-1;
+	return $id;
+}
+
+sub get_string($) {
+	my ($id) = @_;
+
+	if (!defined $defs->{string}->[$id]) {
+		#die("Undefined stringid referenced");
+		return "Undefined stringid referenced";
+	}
+	return $defs->{string}->[$id];
+}
+
+sub define_layout($) {
+	my ($layoutstring) = @_;
+	my $layout;
+
+	my %sizes = (
+		string => 0,
+		string_id => 4,
+		ipaddr => 4, port => 4, proto => 4,
+		rule => 4, 
+		int => 4,
+		timestamp => 4,
+		timestmp => 4,
+		time => 4,
+		uint => 4,
+		mask => 4,
+	);
+
+	$layout->{raw} = $layoutstring;
+
+	$layout->{itemsize} = 0;
+	while ($layoutstring =~ s/^\"([^\"]+)\"\s+\"([^\"]+)\"(\s+)?//) {
+		my $item;
+		my $thissize;
+		$item->{name} = $1;
+		$item->{type} = $2;
+		if (defined $sizes{$2}) {
+			$thissize=$sizes{$2};
+		} else {
+			print "\n";
+			print "name $1\n";
+			print "type $2\n";
+			die("Unknown Item type $2");
+		}
+		$layout->{itemsize}+=$thissize;
+		$item->{size} = $thissize;
+		push @{$layout->{items}},$item;
+	}
+
+	push @{$defs->{layout}}, $layout;
+	my $id = (@{$defs->{layout}})-1;
+	return $id;
+}
+
+sub get_layout($) {
+	my ($id) = @_;
+
+	if (!defined $defs->{layout}->[$id]) {
+		#die("Undefined layout referenced");
+		return "Undefined stringid referenced"
+	}
+	return $defs->{layout}->[$id];
+}
+
+sub get_layout_itemsize($) {
+	my ($id) = @_;
+
+	if (!defined $defs->{layout}->[$id]) {
+		die("Undefined layout referenced");
+	}
+	return $defs->{layout}->[$id]->{itemsize};
+}
+
+#
+#
+#
+sub process_file_header($) {
+	my ($fh) = @_;
+
+	my ($buf);
+	read($fh,$buf,0x50,0);
+
+	# 0x00:		ab cd ef ff	Magic number?
+
+	my ($magic1,$unk1,$time1,$unk2,$fill2,$time2) =
+		unpack('N N N H16 H16 N',$buf);
+
+	print("process_file_header:\n");
+	if ($magic1 != 0xabcdefff) {
+		die('bad magic');
+	}
+	if ($unk1 != 6) {
+		# size of used header in dwords?
+		warn("\tunk1 == $unk1\n");
+	}
+	print "\ttime1=",strftime("%Y-%m-%d %H:%M:%S",localtime($time1)),"\n";
+	print "\ttime2=",strftime("%Y-%m-%d %H:%M:%S",localtime($time2)),"\n";
+	print "\tunk2=$unk2\n";
+	if ($fill2 ne '8fc4ac18010c6363') {
+		print "\tfill2=$fill2\n";
+	}
+	
+
+	#hexdump($buf);
+	#print("\n");
+
+}
+
+# flags=00000000, head=20, data= 40, no FF, no prehead, block= 60
+# flags=00001700, head=20, data= 60,! 2 FF, no prehead, block= 88, error=-8 (no FF)
+# flags=0000ff00, head=20, data=100, no FF, no prehead, block=120
+# flags=01000000, head=20, data=108,  2 FF, no prehead, block=128, FFFF!=FFFF!
+# flags=01000100, head=20, data= 96, no FF, no prehead, block=116
+# flags=01000200, head=20, data= 92,! 2 FF, no prehead, block=120, error=-8 (no FF)
+# flags=01001000, head=20, data=308, no FF, no prehead, block=328
+# flags=01001700, head=20, data=144,! 2 FF, no prehead, block=172, error=-8 (no FF)
+# flags=0100ff00, head=20, data= 12, no FF, no prehead, block= 32
+# flags=01040000, head=20, data= 36, no FF, no prehead, block= 56
+# flags=01040200, head=20, data= 36,! 2 FF, no prehead, block= 64, error=-8 (no FF)
+# flags=0140ff00, head=20, data= 64, no FF, no prehead, block= 84
+# flags=21000000, head=20, data=128, no FF, no prehead, block=148, error=?? (FF, prehead)
+# flags=21000100, head=20, data=136, no FF, no prehead, block=156
+# flags=2100ff00, head=20, data= 64, no FF, no prehead, block= 84
+# flags=41040000, head=20, data=144,! noFF, 16 prehead, block=180, error=+8 (FF)
+# flags=41040200, head=20, data= 36,  2 FF, 16 prehead, block= 80
+# flags=41040300, head=20, data=124,  2 FF, 16 prehead, block=168
+# flags=41040400, head=20, data=124,  2 FF, 16 prehead, block=168
+# flags=80000000, head=20, data= 40, no FF, no prehead, block= 60
+# flags=81040000, head=20, data= 36, no FF, no prehead, block= 56
+# flags=8140ff00, head=20, data= 32, no FF, no prehead, block= 52
+# flags=c0000200, head=20, data= 36,  2 FF, 16 prehead, block= 80, FFFF!=FFFF!
+# flags=c0000400, head=20, data= 88,  2 FF, 16 prehead, block=132, FFFF!=FFFF!
+# flags=c1040200, head=20, data= 40,  2 FF, 16 prehead, block= 84
+
+# FIXME - deduce the pattern and remove this
+my $hdr1=8;	# the 8 bytes of FF header
+my $hdr2=16;	# the extra date and source details header
+my %seenflags = (
+	'00000000' => 0,
+        '00000100' => 0,
+        '00001700' => 0,
+        '01000000' => 0,
+        '01000100' => 0,
+        '01001000' => 0,
+        '01001700' => 0,
+        '01001100' => 0,
+        '0100ff00' => 0,
+        '01040000' => 0,
+        '01040200' => 0,
+        '0140ff00' => 0,
+        '20000100' => 0,
+        '2000ff00' => 0,
+        '20002200' => 0,
+        '2100ff00' => 0,
+        '40040200' => $hdr1+$hdr2,
+        '41040200' => $hdr1+$hdr2,
+        '41040300' => $hdr1+$hdr2,
+        '41040400' => $hdr1+$hdr2,
+        '61040200' => $hdr1+$hdr2,
+        '80000000' => 0,
+        '81000100' => 0,
+        '81000200' => 0,
+        '8140ff00' => 0,
+        'a1000100' => 0,
+        'c0000200' => $hdr1+$hdr2,
+        'c1000200' => $hdr1+$hdr2,
+        'c1040200' => $hdr1+$hdr2,
+        'c1040300' => $hdr1+$hdr2,
+);
+
+sub process_std_header($) {
+	my ($self) = @_;
+
+	my ($datalen,$type,$logsrc,$unixtime,$interface,$flags1) = unpack('nna4NNa4',$self->{header});
+
+	$self->{datalen} = $datalen;
+	$self->{type} = $type;
+	if ($logsrc ne "\0\0\0\0") {
+		$self->{logsrc} = inet_ntoa($logsrc);
+	}
+	if ($unixtime != 0) {
+		$self->{time} = strftime("%Y-%m-%d %H:%M:%S",localtime($unixtime));
+		$self->{timeunix} = $unixtime;
+	}
+	if ($interface != 0xffffffff) {
+		$self->{interface} = $interface;
+	}
+
+	my $flags = unpack('H8',$flags1);
+	$self->{flags} = $flags;
+
+	my ($prehead) = unpack('C',$flags1);
+	my ($FFFF) = unpack('x2C',$flags1);
+
+	if ($prehead & 0x40) {
+		$self->{prehead} = 1;
+	} else {
+		$self->{prehead} = 0;
+	}
+
+	if ($FFFF == 0xff) {
+		$self->{FFFF}=0;
+	} elsif ($FFFF & 0x06) {
+		$self->{FFFF}=1;
+	} else {
+		$self->{FFFF}=0;
+	}
+
+	if (!defined $seenflags{$self->{flags}}) {
+		$self->{_dumpen} = 1;
+		$self->{_dumppause} = 1;
+		# guess..
+		$seenflags{$self->{flags}}=
+			($self->{FFFF}?$hdr1:0) + ($self->{prehead}?$hdr2:0);
+	}
+
+#	if ($flags eq '01040200' || $flags eq '01000200' ||
+#	) {
+#		# HACK
+#		print "WARN: HACK NO FF APPLIED\n";
+#		$self->{FFFF}=0;
+#		$self->{hack}++;
+#	}
+#
+#	if ($flags eq '41040000'
+#	) {
+#		# HACK
+#		print "WARN: HACK  2 FF APPLIED\n";
+#		$self->{FFFF}=1;
+#		$self->{hack}++;
+#	}
+#
+#	if ($flags eq '21000000'
+#	) {
+#		# HACK
+#		print "WARN: HACK  2 FF and PREHEAD APPLIED\n";
+#		$self->{FFFF}=1;
+#		$self->{prehead}=1;
+#		$self->{hack}++;
+#	}
+
+	$self->{blocklen} =
+		$self->{headerlen} +
+		$self->{datalen} +
+		$seenflags{$self->{flags}};
+		#($self->{FFFF}?8:0) +
+		#($self->{prehead}?16:0);
+
+	return $self;
+}
+
+# FIXME - global var
+my $filename;
+
+sub dump_block($) {
+	my ($self) = @_;
+
+	if (!defined $self->{_dumpen}) {
+		#print $self->{flags},"\n";
+		return;
+	}
+
+	print "\n";
+	printf("	'$self->{flags}' => x,\n");
+	printf("# flags=%s, head=%2i, data=%3i, %s FF, %s prehead, block=%3i\n",
+		$self->{flags}, $self->{headerlen}, $self->{datalen},
+		($self->{FFFF}?" 2":"no"),
+		($self->{prehead}?"16":"no"),
+		$self->{blocklen});
+
+
+	# ick ick ick.  There must be a cleaner way to do this
+	# FIXME - dont delete the large buffer
+	my $buf = $self->{buf};
+	delete $self->{buf};
+	my $header = $self->{header};
+	delete $self->{header};
+
+	print "Dump Block\n";
+	my $dump = Data::Dumper->new([$self],['block']);
+	print $dump->Dump;
+
+	$self->{header} = $header;
+	my $data;
+	if (defined $buf) {
+		$data=$header.$buf;
+	} else {
+		$data=$header;
+	}
+
+	print "Data:\n";
+	hexdump($data);
+	print "\n";
+
+	if (defined $self->{_dumppause}) {
+		print "File: $filename\n";	# FIXME - uses global
+		print "[pause]";
+		<STDIN>;
+		print "\n";
+	}
+}
+
+sub print_block_prefix($) {
+	my ($self) = @_;
+
+	printf("%08x: ",$self->{offset});
+	printf("f:%s ",$self->{flags});
+	if (defined $self->{time}) {
+		print $self->{time}," ";
+	#} else {
+	#	print "                    ";
+	}
+	#printf ("(0x%04x,0x%04x) ",$self->{type},$self->{datalen});
+	if (defined $self->{logsrc}) {
+		print "log=$self->{logsrc} ";
+	}
+	if (defined $self->{interface}) {
+		print get_string($self->{interface})," ";
+	}
+}
+
+sub process_block_ff00($) {
+	my ($self) = @_;
+
+	my ($string) = unpack('Z*',$self->{buf});
+
+	my $id = define_layout($string);
+	print "DEFINE Layout($id)=$string\n";
+	print Dumper(get_layout($id));
+}
+
+sub process_block_ff01($) {
+	my ($self) = @_;
+
+	print "DEFINE Unknown";
+	dump_block($self);
+}
+
+# BLOCK 0xff02 - define string
+#
+sub process_block_string($) {
+	my ($self) = @_;
+
+	my ($string) = unpack('Z*',$self->{buf});
+
+	print "DEFINE String(",define_string($string),")=$string";
+}
+
+sub process_block_ffxx($$) {
+	my ($self,$fh) = @_;
+
+	$fh->read($self->{buf},$self->{blocklen}-$self->{headerlen},0);
+
+	my $type = $self->{type};
+	if ($type == 0xff00) {
+		process_block_ff00($self);
+	} elsif ($type == 0xff01) {
+		process_block_ff01($self);
+	} elsif ($type == 0xff02) {
+		process_block_string($self);
+	} else {
+		dump_block($self);
+		die("Unknown 0xFFxx Block type $type");
+	}
+}
+
+sub process_block_accept($$) {
+	my ($buf,$store) = @_;
+
+	my $exceptions;
+
+	my ($logsrc,$time1,
+		$interface,$fill1,$fill2,$time2,$fill3,$logsrc2,$fill4,
+		$product,$policy,
+		$src,$sport,$dst,$dport,$proto,$rule,
+		$fill5) = unpack('x4 N N N H8 H16 N H8 N H8 N N a4 N a4 N N N H8',$buf);
+
+	# logsrc
+	# time1		(log time?)
+	# interface
+	if ($fill1 ne '41040200') {
+		$exceptions.='1='.$fill1.' ';
+	}
+	if ($fill2 ne 'ffffffffffffffff') {
+		$exceptions.='2!=f ';
+	}
+	if ($time1 ne $time2) {
+		$exceptions.='t1!=t2 ';
+	}
+	$exceptions.='3='.$fill3.' ';
+	# logsrc2 in host byte order?
+	if ($fill4 ne '000007b6') {
+		$exceptions.="4=$fill4 ";
+	}
+	$exceptions.="p=$product ";
+	$exceptions.="pol=$policy ";
+	if ($fill5 ne 'ffffffff') {
+		$exceptions.='5!=f ';
+	}
+
+	if ($proto == 6) {
+		print "TCP ";
+	} else {
+		print "proto$proto ";
+	}
+	printf "%s:%i -> %s:%i (rule=%i)",inet_ntoa($src),$sport,inet_ntoa($dst),$dport,$rule;
+	print " $exceptions\n";
+
+	#hexdump($buf);
+	#print "\n";
+}
+
+# FIXME - global debugging header
+my $lasttime = 0;
+sub process_file_block($) {
+	my ($fh) = @_;
+	my $self;
+
+	# read header
+	$self->{headerlen} = 20;
+	$self->{offset} = $fh->tell;	# FIXME, why does this offset look wrong?
+	$fh->read($self->{header},$self->{headerlen},0);
+	process_std_header($self);
+	
+	if (defined($self->{timeunix}) && ($self->{timeunix} < ($lasttime - 900))) {
+		# time went backwards.  Possibly a decode error
+		# FIXME - fudge factor for clustered logging
+		$self->{_dumpen} = 1;
+		$self->{_dumppause} = 1;
+		print "WARN: Time went backwards\n";
+	}
+	$lasttime = $self->{timeunix};
+
+	print_block_prefix($self);
+
+	if ($self->{type} >= 0xff00) {
+		process_block_ffxx($self,$fh);
+	} else {
+		#$self->{itemsize} = get_layout_itemsize($self->{type});
+
+		$fh->read($self->{buf},$self->{blocklen}-$self->{headerlen},0);
+
+		dump_block($self);
+	}
+
+	print "\n";
+}
+
+sub do_one_file($) {
+	($filename) = @_;
+	if (!$filename) {
+		die "no filename given";
+	}
+	vprint(1,"$filename: Processing\n");
+
+	my $fh;
+	if ($filename =~ m/\.gz$/) {
+		$fh = FileHandle->new("gzip -dc $filename|");
+	} else {
+		$fh = FileHandle->new($filename);
+	}
+	if (!$fh) {
+		die "could not open file\n";
+	}
+
+	if (!$option->{skipheader}) {
+		process_file_header($fh);
+	}
+	if ($option->{seek}) {
+		$fh->seek($option->{seek});
+	}
+	while (!$fh->eof()) {
+		process_file_block($fh);
+	}
+}
+
+
+if (! $ARGV[0] ) {
+	die "no filename";
+}
+
+while ($ARGV[0]) {
+	# first, reset the data store
+	$defs = {};
+	do_one_file($ARGV[0]);
+	shift;
+}
+
+
+__END__
+=head1 NAME
+
+fwlogdump - print the contents of a checkpoint fw.log file
+
+=cut
+
