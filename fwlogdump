@@ -210,6 +210,9 @@ sub process_file_header($) {
 
 }
 
+# FIXME - global
+my $stats = {};
+
 # flags=00000000, head=20, data= 40, no FF, no prehead, block= 60
 # flags=00001700, head=20, data= 60,! 2 FF, no prehead, block= 88, error=-8 (no FF)
 # flags=0000ff00, head=20, data=100, no FF, no prehead, block=120
@@ -243,6 +246,7 @@ my %seenflags = (
 	'00000000' => 0,
         '00000100' => 0,
         '00001700' => 0,
+        '0000ff00' => 0,
         '01000000' => 0,
         '01000100' => 0,
         '01000200' => 0,
@@ -312,6 +316,7 @@ sub process_std_header($) {
 		# guess..
 		$seenflags{$self->{flags}}=
 			($self->{FFFF}?$hdr1:0) + ($self->{prehead}?$hdr2:0);
+		$stats->{unknown}->{flags}++;
 	}
 
 	$self->{blocklen} =
@@ -327,13 +332,14 @@ sub process_std_header($) {
 # FIXME - global var
 my $filename;
 
-sub dump_block($) {
-	my ($self) = @_;
+sub dump_block($$) {
+	my ($self,$comment) = @_;
 
 	if (!defined $self->{_dumpen}) {
 		#print $self->{flags},"\n";
 		return;
 	}
+	print_block_prefix($self,$comment);
 
 	print "\n";
 	printf("	'$self->{flags}' => x,\n");
@@ -375,8 +381,8 @@ sub dump_block($) {
 	}
 }
 
-sub print_block_prefix($) {
-	my ($self) = @_;
+sub print_block_prefix($$) {
+	my ($self,$comment) = @_;
 
 	printf("%08x: ",$self->{offset});
 	printf("f:%s ",$self->{flags});
@@ -392,6 +398,9 @@ sub print_block_prefix($) {
 	if (defined $self->{interface}) {
 		print get_string($self->{interface})," ";
 	}
+	if (defined $comment) {
+		print $comment;
+	}
 }
 
 sub process_block_ff00($) {
@@ -401,14 +410,13 @@ sub process_block_ff00($) {
 
 	my $id = define_layout($string);
 	print "DEFINE Layout($id)=$string\n";
-	print Dumper(get_layout($id));
+	#print Dumper(get_layout($id));
 }
 
 sub process_block_ff01($) {
 	my ($self) = @_;
 
-	print "DEFINE Unknown";
-	dump_block($self);
+	dump_block($self,"DEFINE Unknown");
 }
 
 # BLOCK 0xff02 - define string
@@ -418,7 +426,7 @@ sub process_block_string($) {
 
 	my ($string) = unpack('Z*',$self->{buf});
 
-	print "DEFINE String(",define_string($string),")=$string";
+	print "DEFINE String(",define_string($string),")=$string\n";
 }
 
 sub process_block_ffxx($$) {
@@ -434,8 +442,8 @@ sub process_block_ffxx($$) {
 	} elsif ($type == 0xff02) {
 		process_block_string($self);
 	} else {
-		dump_block($self);
-		die("Unknown 0xFFxx Block type $type");
+		dump_block($self,"Unknown 0xFFxx Block type $type");
+		$stats->{unknown}->{type}++;
 	}
 }
 
@@ -450,7 +458,14 @@ sub process_file_block($) {
 	$self->{offset} = $fh->tell;	# FIXME, why does this offset look wrong?
 	$fh->read($self->{header},$self->{headerlen},0);
 	process_std_header($self);
-	
+
+	$stats->{lines}++;
+	if (defined $self->{logsrc}) {
+		$stats->{logsrc}->{$self->{logsrc}}++;
+	}
+	$stats->{flags}->{$self->{flags}}++;
+	$stats->{type}->{sprintf('%04x',$self->{type})}++;
+		
 	if (defined($self->{timeunix}) && ($self->{timeunix} < ($lasttime - 900))) {
 		# time went backwards.  Possibly a decode error
 		# FIXME - fudge factor for clustered logging
@@ -460,7 +475,7 @@ sub process_file_block($) {
 	}
 	$lasttime = $self->{timeunix};
 
-	print_block_prefix($self);
+	#print_block_prefix($self);
 
 	if ($self->{type} >= 0xff00) {
 		process_block_ffxx($self,$fh);
@@ -469,10 +484,9 @@ sub process_file_block($) {
 
 		$fh->read($self->{buf},$self->{blocklen}-$self->{headerlen},0);
 
-		dump_block($self);
+		dump_block($self,'');
 	}
 
-	print "\n";
 }
 
 sub do_one_file($) {
@@ -511,7 +525,11 @@ if (! $ARGV[0] ) {
 while ($ARGV[0]) {
 	# first, reset the data store
 	$defs = {};
+	$stats = {};
+
 	do_one_file($ARGV[0]);
+
+	print "Dump Stats: ",Dumper($stats),"\n";
 	shift;
 }
 
