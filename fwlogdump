@@ -239,44 +239,70 @@ my $stats = {};
 # flags=c0000400, head=20, data= 88,  2 FF, 16 prehead, block=132, FFFF!=FFFF!
 # flags=c1040200, head=20, data= 40,  2 FF, 16 prehead, block= 84
 
+# Flags probably incluse "Type" and "Action"
+#
+# Types:
+#  Account
+#  Alert
+#  Control
+#  Log
+#
+# Action:
+#  Accept
+#  Authorize
+#  Block
+#  Bypass
+#  Deauthorize
+#  Decrypt
+#  Drop
+#  Encrypt
+#  Inspect
+#  Key Install
+#  Login
+#  Monitor Only
+#  Quarantine
+#  Reject
+#  Replace Malicious Code
+#  VPN Routing
+
 # FIXME - deduce the pattern and remove this
 my $hdr1=8;	# the 8 bytes of FF header
 my $hdr2=16;	# the extra date and source details header
 my %seenflags = (
 	'00000000' => 0,
-        '00000100' => 0,
-        '00001700' => 0,
-        '0000ff00' => 0,
-        '01000000' => 0,
-        '01000100' => 0,
-        '01000200' => 0,
-        '01001000' => 0,
-        '01001700' => 0,
-        '01001100' => 0,
-        '0100ff00' => 0,
-        '01040000' => 0,
-        '01040200' => 0,
-        '0140ff00' => 0,
-        '20000100' => 0,
-        '2000ff00' => 0,
-        '20002200' => 0,
-        '21000100' => 0,
-        '2100ff00' => 0,
-        '40040200' => $hdr1+$hdr2,
-        '41040000' => $hdr1+$hdr2,
-        '41040200' => $hdr1+$hdr2,
-        '41040300' => $hdr1+$hdr2,
-        '41040400' => $hdr1+$hdr2,
-        '61040200' => $hdr1+$hdr2,
-        '80000000' => 0,
-        '81000100' => 0,
-        '81000200' => 0,
-        '8140ff00' => 0,
-        'a1000100' => 0,
-        'c0000200' => $hdr1+$hdr2,
-        'c1000200' => $hdr1+$hdr2,
-        'c1040200' => $hdr1+$hdr2,
-        'c1040300' => $hdr1+$hdr2,
+	'00000100' => 0,
+	'00001700' => 0,
+	'0000ff00' => 0,
+	'01000000' => 0,
+	'01000100' => 0,		# Log, Reject
+	'01000200' => 0,
+	'01001000' => 0,		# Log, Key Install
+	'01001700' => 0,
+	'01001100' => 0,
+	'0100ff00' => 0,
+	'01040000' => 0,
+	'01040200' => 0,
+	'0140ff00' => 0,
+	'20000100' => 0,
+	'2000ff00' => 0,
+	'20002200' => 0,
+	'21000100' => 0,		# Alert, Reject
+	'2100ff00' => 0,
+	'40040200' => $hdr1+$hdr2,
+	'41040000' => $hdr1+$hdr2,
+	'41040200' => $hdr1+$hdr2,
+	'41040300' => $hdr1+$hdr2,
+	'41040400' => $hdr1+$hdr2,	# Log, (Decrypt|Encrypt)
+	'61040200' => $hdr1+$hdr2,
+	'80000000' => 0,
+	'81000100' => 0,
+	'81000200' => 0,
+	'8140ff00' => 0,
+	'a1000100' => 0,
+	'c0000200' => $hdr1+$hdr2,
+	'c1000200' => $hdr1+$hdr2,
+	'c1040200' => $hdr1+$hdr2,
+	'c1040300' => $hdr1+$hdr2,
 );
 
 sub process_std_header($) {
