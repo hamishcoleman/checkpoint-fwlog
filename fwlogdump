@@ -25,6 +25,10 @@ use Data::Dumper;
 $Data::Dumper::Indent = 1;
 $Data::Dumper::Sortkeys = 1;
 
+# no buffering on stdout:
+select(STDOUT);
+$|=1;
+
 my $option={};		# set option defaults here
 my $errorcode=0;
 # remember to update the SYNOPSIS and OPTIONS when this changes
@@ -269,10 +273,11 @@ my $stats = {};
 my $hdr1=8;	# the 8 bytes of FF header
 my $hdr2=16;	# the extra date and source details header
 my %seenflags = (
-	'00000000' => 0,
+	'00000000' => 0,		# Log, Drop?
 	'00000100' => 0,
 	'00001700' => 0,
 	'0000ff00' => 0,
+	'0040ff00' => 0,		# Control?
 	'01000000' => 0,
 	'01000100' => 0,		# Log, Reject
 	'01000200' => 0,
@@ -280,9 +285,9 @@ my %seenflags = (
 	'01001700' => 0,
 	'01001100' => 0,
 	'0100ff00' => 0,
-	'01040000' => 0,
+	'01040000' => 0,		# Log, Drop?
 	'01040200' => 0,
-	'0140ff00' => 0,
+	'0140ff00' => 0,		# Control?
 	'20000100' => 0,
 	'2000ff00' => 0,
 	'20002200' => 0,
@@ -290,9 +295,9 @@ my %seenflags = (
 	'2100ff00' => 0,
 	'40040200' => $hdr1+$hdr2,
 	'41040000' => $hdr1+$hdr2,
-	'41040200' => $hdr1+$hdr2,
+	'41040200' => $hdr1+$hdr2,	# Log, Accept?
 	'41040300' => $hdr1+$hdr2,
-	'41040400' => $hdr1+$hdr2,	# Log, (Decrypt|Encrypt)
+	'41040400' => $hdr1+$hdr2,	# Log, (Decrypt|Encrypt)?
 	'61040200' => $hdr1+$hdr2,
 	'80000000' => 0,
 	'81000100' => 0,
@@ -485,13 +490,6 @@ sub process_file_block($) {
 	$fh->read($self->{header},$self->{headerlen},0);
 	process_std_header($self);
 
-	$stats->{lines}++;
-	if (defined $self->{logsrc}) {
-		$stats->{logsrc}->{$self->{logsrc}}++;
-	}
-	$stats->{flags}->{$self->{flags}}++;
-	$stats->{type}->{sprintf('%04x',$self->{type})}++;
-		
 	if (defined($self->{timeunix}) && ($self->{timeunix} < ($lasttime - 900))) {
 		# time went backwards.  Possibly a decode error
 		# FIXME - fudge factor for clustered logging
@@ -503,9 +501,20 @@ sub process_file_block($) {
 
 	#print_block_prefix($self);
 
+	$stats->{lines}->{total}++;
+	if (defined $self->{logsrc}) {
+		$stats->{logsrc}->{$self->{logsrc}}++;
+	}
+	$stats->{type}->{sprintf('%04x',$self->{type})}++;
+
 	if ($self->{type} >= 0xff00) {
+		$stats->{lines}->{metadata}++;
+		$stats->{flags}->{metadata}->{$self->{flags}}++;
 		process_block_ffxx($self,$fh);
 	} else {
+		$stats->{lines}->{log}++;
+		$stats->{flags}->{log}->{$self->{flags}}++;
+
 		#$self->{itemsize} = get_layout_itemsize($self->{type});
 
 		$fh->read($self->{buf},$self->{blocklen}-$self->{headerlen},0);
@@ -538,7 +547,36 @@ sub do_one_file($) {
 	if ($option->{seek}) {
 		$fh->seek($option->{seek});
 	}
+
+	my $status_lasttime = time();
+	my $status_nextline;
+	my $status_gap;
 	while (!$fh->eof()) {
+
+		if (!defined $status_gap) {
+			my $thistime = time();
+			if ($thistime == $status_lasttime+2) {
+				$status_gap = $stats->{lines}->{total};
+				$status_nextline = $status_gap*2;
+			}
+		} elsif ($stats->{lines}->{total} > $status_nextline) {
+			# Print some status to show that we are not dead
+			my $thistime = time();
+			if ($thistime == $status_lasttime+2) {
+				print "=";
+			} elsif ($thistime > $status_lasttime+2) {
+				$status_gap --;
+				print "<";
+			} elsif ($thistime < $status_lasttime+2) {
+				$status_gap ++;
+				print ">";
+			}
+			printf "%05i ",$status_gap;
+			$status_lasttime = $thistime;
+			$status_nextline = $stats->{lines}->{total} + $status_gap;
+			print "$stats->{lines}->{total}\r";
+		}
+
 		process_file_block($fh);
 	}
 }
