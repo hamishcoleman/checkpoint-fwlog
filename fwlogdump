@@ -275,6 +275,7 @@ my $hdr2=16;	# the extra date and source details header
 my %seenflags = (
 	'00000000' => 0,		# Log, Drop?
 	'00000100' => 0,
+	'00000200' => 0,
 	'00001700' => 0,
 	'0000ff00' => 0,
 	'0040ff00' => 0,		# Control?
@@ -299,9 +300,10 @@ my %seenflags = (
 	'41040300' => $hdr1+$hdr2,
 	'41040400' => $hdr1+$hdr2,	# Log, (Decrypt|Encrypt)?
 	'61040200' => $hdr1+$hdr2,
-	'80000000' => 0,
+	'80000000' => 0,		# Log, Drop?
 	'81000100' => 0,
 	'81000200' => 0,
+	'81040000' => 0,
 	'8140ff00' => 0,
 	'a1000100' => 0,
 	'c0000200' => $hdr1+$hdr2,
@@ -440,7 +442,7 @@ sub process_block_ff00($) {
 	my ($string) = unpack('Z*',$self->{buf});
 
 	my $id = define_layout($string);
-	print "DEFINE Layout($id)=$string\n";
+	printf "DEFINE Layout(0x%02x)=%s\n",$id,$string;
 	#print Dumper(get_layout($id));
 }
 
@@ -457,7 +459,7 @@ sub process_block_string($) {
 
 	my ($string) = unpack('Z*',$self->{buf});
 
-	print "DEFINE String(",define_string($string),")=$string\n";
+	printf "DEFINE String(0x%02x)=%s\n",define_string($string),$string;
 }
 
 sub process_block_ffxx($$) {
