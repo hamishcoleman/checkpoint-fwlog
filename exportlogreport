@@ -1,0 +1,227 @@
+#!/usr/bin/perl
+use warnings;
+use strict;
+#
+#
+# Read an exported checkpoint firewall log and spit out a report
+#
+
+use Getopt::Long 2.33 qw(:config gnu_getopt);
+use Pod::Usage;
+
+use Data::Dumper;
+$Data::Dumper::Indent = 1;
+$Data::Dumper::Sortkeys = 1;
+
+use FileHandle;
+use HTTP::Date;
+
+###############################################################################
+##
+## Standard options processor
+sub do_options(%@) {
+	my $option = shift;
+	GetOptions($option,@_) or pod2usage(2);
+	pod2usage(-exitstatus => 0, -verbose => 2) if $option->{man};
+
+	if ($option->{quiet}) {
+		delete $option->{verbose};
+	}
+}
+
+###############################################################################
+
+my $option={};          # set option defaults here
+$option->{verbose}=0;
+$option->{show}=10;
+# remember to update the SYNOPSIS and OPTIONS when this changes
+do_options($option,
+                "man",
+                "verbose|v+",
+                "quiet|q",
+		"show=i",
+);
+
+sub handle_line_export_fw($$) {
+	my ($db,$line) = @_;
+
+	if ($line =~ m/^Date:\s+(.*)$/) {
+		$db->{meta}->{Date}=$1;
+		return undef;
+	}
+	
+#23:59:02 ctl    172.24.1.41 >daemon log_sys_message: Log file has been switched to: 2008-01-02_235900.log; product: VPN-1 & FireWall-1;
+#23:51:10 accept 172.24.51.246 >eth-s1/s2p1c9 src: 200.69.59.129; dst: 172.31.22.15; proto: tcp; rule: 45; product: VPN-1 & FireWall-1; service: smtp; s_port: 3967;
+
+	if (!($line =~ m/^(\d\d:\d\d:\d\d)\s+(\w+)\s+([\d\.]+)\s+([<>])([^\s]+)\s+(.*)$/)) {
+		$db->{meta}->{lines}->{skipped}++;
+		return undef;
+	}
+
+	my $fields;
+	$fields->{Time}=$1;
+	$fields->{Action}=$2;
+	$fields->{OriginIP}=$3;
+	$fields->{_direction}=$4;
+	$fields->{Interface}=$5;
+
+	for my $s (split /;\s*/,$6) {
+		if ($s =~ m/^([\w\s]+):\s+(.*)$/) {
+			$fields->{$1} = $2;
+		} else {
+			$db->{meta}->{lines}->{badvarval}++;
+		}
+	}
+
+	$db->{meta}->{lines}->{processed}++;
+	return $fields;
+}
+
+sub line_guess_format($$) {
+	my ($db,$line) = @_;
+
+	if ($line =~ m/^\"Number"/) {
+		$db->{meta}->{fieldstr}=$_;
+		return "export gui";
+	}
+	if ($line =~ m/^Date: (.*)/) {
+		return "export fw";
+	}
+	return undef;
+}
+
+sub accumulate_line($$) {
+	my ($db,$fields) = @_;
+
+	$db->{db}->{_}++;
+
+	if (!defined($fields->{OriginIP})) {
+		return;
+	}
+	$db->{db}{$fields->{OriginIP}}->{_}++;
+
+	if (!defined($fields->{Action})) {
+		return;
+	}
+	$db->{db}{$fields->{OriginIP}}->{$fields->{Action}}->{_}++;
+
+	if (defined($fields->{rule})) {
+		$db->{db}{$fields->{OriginIP}}->{$fields->{Action}}->{$fields->{rule}}->{_}++;
+	} elsif (defined($fields->{message_info})) {
+		$db->{db}{$fields->{OriginIP}}->{$fields->{Action}}->{$fields->{message_info}}->{_}++;
+	} elsif (defined($fields->{'TCP packet out of state'})) {
+		$db->{db}{$fields->{OriginIP}}->{$fields->{Action}}->{$fields->{'TCP packet out of state'}}->{_}++;
+	}
+
+}
+
+sub mysort($$){
+	my ($refa,$refb) = @_;
+	my ($a,$b)= (0,0);
+
+	if (ref $refa && defined $refa->{_}) {
+		$a = $refa->{_};
+	}
+	if (ref $refb && defined $refb->{_}) {
+		$b = $refb->{_};
+	}
+	return $b <=> $a;
+}
+
+sub print_report($) {
+	my ($db) = @_;
+	my $total;
+
+	print "filename $db->{meta}->{filename}\n";
+	printf("Total Lines: %6i\n",$db->{meta}->{lines}->{total});
+	printf("Log Lines:   %6i\n",$db->{meta}->{lines}->{processed});
+	print "\n";
+
+	print "Lines\tOrigin\n";
+	$total = $db->{db}->{_};
+	printf("%6i\t%s\n",$total,'TOTAL');
+	for my $origin (sort {mysort($db->{db}{$a},$db->{db}{$b})} keys %{$db->{db}}) {
+		next if $origin eq '_';
+		printf("%6.2f%%\t%s\n",$db->{db}->{$origin}->{_}/$total*100,$origin);
+	}
+	print "\n";
+
+	for my $origin (sort keys %{$db->{db}}) {
+		next if $origin eq '_';
+
+		print "Lines\tOrigin\tAction\n";	
+		$total = $db->{db}->{$origin}->{_};
+		printf("%6i\t%s\t%s\n",$total,$origin,'TOTAL');
+		for my $action (sort {mysort($db->{db}{$origin}{$a},$db->{db}{$origin}{$b})} keys %{$db->{db}->{$origin}}) {
+			next if $action eq '_';
+			printf("%6.2f%%\t%s\t%s\n",$db->{db}->{$origin}->{$action}->{_}/$total*100,$origin,$action);
+		}
+		print "\n";
+
+	}
+
+	for my $origin (sort keys %{$db->{db}}) {
+		next if $origin eq '_';
+
+		for my $action (sort keys %{$db->{db}->{$origin}}) {
+			next if $action eq '_';
+
+			print "Lines\t$origin\t$action\tRule\n";	
+			$total = $db->{db}->{$origin}->{$action}->{_};
+			printf("%6i\t%s\t%s\t%s\n",$total,$origin,$action,'TOTAL');
+			my $count=0;
+			for my $rule (sort {mysort($db->{db}{$origin}{$action}{$a},$db->{db}{$origin}{$action}{$b})} keys %{$db->{db}->{$origin}->{$action}}) {
+				next if $rule eq '_';
+				last if $option->{show} && $count > $option->{show};
+				printf("%6.2f%%\t%s\t%s\t%s\n",$db->{db}->{$origin}->{$action}->{$rule}->{_}/$total*100,$origin,$action,$rule);
+				$count++;
+			}
+			print "\n";
+		}
+	}
+}
+
+my $db;
+
+my $fh;
+# TODO - handle multiple files in one run
+if ($ARGV[0] =~ m/\.gz$/) {
+	$fh = new FileHandle "gzip -dc <'$ARGV[0]' |";
+} else {
+	$fh = new FileHandle "$ARGV[0]","r";
+}
+if (!defined($fh)) {
+	die ("ERROR: could not open $ARGV[0] $!\n");
+}
+$db->{meta}->{filename} = $ARGV[0];
+
+while (<$fh>) {
+	chomp; s/\r//g;
+	$db->{meta}->{lines}->{total}++;
+	next if (!$_);
+	$db->{meta}->{lines}->{withtext}++;
+
+	if (!$db->{meta}->{format}) {
+		$db->{meta}->{format}=line_guess_format($db,$_);
+	}
+
+	my $fields;
+
+	if ($db->{meta}->{format} eq 'export fw') {
+		$fields = handle_line_export_fw($db,$_);
+	} else {
+		$db->{meta}->{lines}->{unhandled}++;
+		next;
+	}
+	# TODO - normalise the field names with the two formats
+
+	#print Dumper($fields);
+	accumulate_line($db,$fields);
+
+	#last if ($db->{meta}->{lines}->{total} > 1000);
+}
+
+#print Dumper($db);
+
+print_report($db);
+
