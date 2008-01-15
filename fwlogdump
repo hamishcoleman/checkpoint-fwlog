@@ -119,6 +119,7 @@ sub get_string($) {
 sub define_layout($) {
 	my ($layoutstring) = @_;
 	my $layout;
+	my $offset =0;
 
 	my %sizes = (
 		string => 0,
@@ -150,8 +151,12 @@ sub define_layout($) {
 			print "type $2\n";
 			die("Unknown Item type $2");
 		}
+
 		$layout->{itemsize}+=$thissize;
 		$item->{size} = $thissize;
+		$item->{offset} = $offset;
+		$offset+=$thissize;
+
 		push @{$layout->{items}},$item;
 	}
 
@@ -165,7 +170,7 @@ sub get_layout($) {
 
 	if (!defined $defs->{layout}->[$id]) {
 		#die("Undefined layout referenced");
-		return "Undefined stringid referenced"
+		return "Undefined layout referenced"
 	}
 	return $defs->{layout}->[$id];
 }
@@ -323,7 +328,8 @@ sub process_std_header($) {
 		$self->{logsrc} = inet_ntoa($logsrc);
 	}
 	if ($unixtime != 0) {
-		$self->{time} = strftime("%Y-%m-%d %H:%M:%S",localtime($unixtime));
+		$self->{datetime} = strftime("%Y-%m-%d %H:%M:%S",localtime($unixtime));
+		$self->{time} = strftime("%H:%M:%S",localtime($unixtime));
 		$self->{timeunix} = $unixtime;
 	}
 	if ($interface != 0xffffffff) {
@@ -352,10 +358,12 @@ sub process_std_header($) {
 		$stats->{unknown}->{flags}++;
 	}
 
+	$self->{layout_offset} = $seenflags{$self->{flags}};
+
 	$self->{blocklen} =
 		$self->{headerlen} +
-		$self->{datalen} +
-		$seenflags{$self->{flags}};
+		$self->{layout_offset} +
+		$self->{datalen};
 		#($self->{FFFF}?8:0) +
 		#($self->{prehead}?16:0);
 
@@ -419,8 +427,8 @@ sub print_block_prefix($$) {
 
 	printf("%08x: ",$self->{offset});
 	printf("f:%s ",$self->{flags});
-	if (defined $self->{time}) {
-		print $self->{time}," ";
+	if (defined $self->{datetime}) {
+		print $self->{datetime}," ";
 	#} else {
 	#	print "                    ";
 	}
@@ -436,13 +444,13 @@ sub print_block_prefix($$) {
 	}
 }
 
-sub process_block_ff00($) {
+sub process_block_layout($) {
 	my ($self) = @_;
 
 	my ($string) = unpack('Z*',$self->{buf});
 
 	my $id = define_layout($string);
-	printf "DEFINE Layout(0x%02x)=%s\n",$id,$string;
+	#printf "DEFINE Layout(0x%02x)=%s\n",$id,$string;
 	#print Dumper(get_layout($id));
 }
 
@@ -459,7 +467,8 @@ sub process_block_string($) {
 
 	my ($string) = unpack('Z*',$self->{buf});
 
-	printf "DEFINE String(0x%02x)=%s\n",define_string($string),$string;
+	my $id = define_string($string);
+	#printf "DEFINE String(0x%02x)=%s\n",$id,$string;
 }
 
 sub process_block_ffxx($$) {
@@ -469,7 +478,7 @@ sub process_block_ffxx($$) {
 
 	my $type = $self->{type};
 	if ($type == 0xff00) {
-		process_block_ff00($self);
+		process_block_layout($self);
 	} elsif ($type == 0xff01) {
 		process_block_ff01($self);
 	} elsif ($type == 0xff02) {
@@ -478,6 +487,31 @@ sub process_block_ffxx($$) {
 		dump_block($self,"Unknown 0xFFxx Block type $type");
 		$stats->{unknown}->{type}++;
 	}
+}
+
+sub output_logline($) {
+	my ($self) = @_;
+
+#23:59:02 ctl    172.24.1.41 >daemon log_sys_message: Log file has been switched to: 2008-01-02_235900.log; product: VPN-1 & FireWall-1;
+#23:51:10 accept 172.24.51.246 >eth-s1/s2p1c9 src: 200.69.59.129; dst: 172.31.22.15; proto: tcp; rule: 45; product: VPN-1 & FireWall-1; service: smtp; s_port: 3967;
+
+	print $self->{time},' ';
+	print 'UNKNOWN',' ';	# Action
+	print $self->{logsrc},' ';
+	print '?';		# Direction
+	print get_string($self->{interface}),' ';
+
+	my $layout = get_layout($self->{type});
+	for my $item (@{$layout->{items}}) {
+		print $item->{name},': ';
+		
+		my $itembuf = substr($self->{buf},$self->{layout_offset}+$item->{offset},$item->{size});
+		print $itembuf,'; ';
+	}
+	print "\n";
+
+	$self->{_dumpen}=1;
+	#print Dumper($self);
 }
 
 # FIXME - global debugging header
@@ -492,6 +526,9 @@ sub process_file_block($) {
 	$fh->read($self->{header},$self->{headerlen},0);
 	process_std_header($self);
 
+	if (!defined $lasttime) {
+		$lasttime=1;
+	}
 	if (defined($self->{timeunix}) && ($self->{timeunix} < ($lasttime - 900))) {
 		# time went backwards.  Possibly a decode error
 		# FIXME - fudge factor for clustered logging
@@ -521,7 +558,9 @@ sub process_file_block($) {
 
 		$fh->read($self->{buf},$self->{blocklen}-$self->{headerlen},0);
 
+		output_logline($self);
 		dump_block($self,'');
+
 	}
 
 }
