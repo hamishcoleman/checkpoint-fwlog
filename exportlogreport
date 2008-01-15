@@ -53,7 +53,7 @@ sub handle_line_export_fw($$) {
 #23:59:02 ctl    172.24.1.41 >daemon log_sys_message: Log file has been switched to: 2008-01-02_235900.log; product: VPN-1 & FireWall-1;
 #23:51:10 accept 172.24.51.246 >eth-s1/s2p1c9 src: 200.69.59.129; dst: 172.31.22.15; proto: tcp; rule: 45; product: VPN-1 & FireWall-1; service: smtp; s_port: 3967;
 
-	if (!($line =~ m/^(\d\d:\d\d:\d\d)\s+(\w+)\s+([\d\.]+)\s+([<>])([^\s]+)\s+(.*)$/)) {
+	if (!($line =~ m/^(\d\d:\d\d:\d\d)\s+(\w+)\s+([\d\.]+)\s+([<>?])([^\s]+)\s+(.*)$/)) {
 		$db->{meta}->{lines}->{skipped}++;
 		return undef;
 	}
