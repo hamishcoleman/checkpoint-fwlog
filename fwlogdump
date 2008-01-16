@@ -35,6 +35,7 @@ my $errorcode=0;
 HC::Tools::options($option,
 	'seek=i',
 	'skipheader!',
+	'dumpblock!',
 );
 
 sub hexdump(\$) {
@@ -376,6 +377,10 @@ my $filename;
 sub dump_block($$) {
 	my ($self,$comment) = @_;
 
+	if (!$option->{dumpblock}) {
+		return;
+	}
+
 	if (!defined $self->{_dumpen}) {
 		#print $self->{flags},"\n";
 		return;
@@ -643,6 +648,27 @@ __END__
 =head1 NAME
 
 fwlogdump - print the contents of a checkpoint fw.log file
+
+=head1 SYNOPSIS
+
+fwlogdump [options]... file1 [fileN]...
+
+ Options:
+   --help, --seek=s, --skipheader, --dumpblock
+
+=head1 OPTIONS
+
+=over 4
+
+=item B<--help>
+
+=item B<--seek>
+
+=item B<--skipheader>
+
+=item B<--dumpblock>
+
+=back
 
 =cut
 
