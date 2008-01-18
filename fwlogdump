@@ -330,7 +330,7 @@ sub process_std_header($) {
 	}
 	if ($unixtime != 0) {
 		$self->{datetime} = strftime("%Y-%m-%d %H:%M:%S",localtime($unixtime));
-		$self->{time} = strftime("%H:%M:%S",localtime($unixtime));
+		$self->{time} = (split ' ',$self->{datetime})[1];
 		$self->{timeunix} = $unixtime;
 	}
 	if ($interface != 0xffffffff) {
