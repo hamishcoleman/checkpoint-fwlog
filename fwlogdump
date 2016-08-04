@@ -11,19 +11,32 @@ use FileHandle;
 use POSIX qw(strftime);
 use Socket;	# for inet_aton
 
-BEGIN {
-	# allow the dev version of the libraries to be used
-	# when running the script from the src dir
-	my $dir = $0;
-	$dir =~ s%/[^/]+%/%;
-	unshift @INC,$dir;
-}
-
-use HC::Tools;
+use Getopt::Long 2.33 qw(:config gnu_getopt);
+use Pod::Usage;
 
 use Data::Dumper;
 $Data::Dumper::Indent = 1;
 $Data::Dumper::Sortkeys = 1;
+
+###############################################################################
+##
+## simple options processor
+sub do_options {
+    my $option = shift;
+    if (!GetOptions($option,@_)) {
+        print("Options: ",join(", ",@_),"\n");
+        pod2usage(2);
+    }
+    if ($option->{man}) {
+        pod2usage(-exitstatus => 0, -verbose => 2);
+    }
+
+    if ($option->{quiet}) {
+        delete $option->{verbose};
+    }
+}
+
+###############################################################################
 
 # no buffering on stdout:
 select(STDOUT);
@@ -32,7 +45,7 @@ $|=1;
 my $option={};		# set option defaults here
 my $errorcode=0;
 # remember to update the SYNOPSIS and OPTIONS when this changes
-HC::Tools::options($option,
+do_options($option,
 	'seek=i',
 	'skipheader!',
 	'dumpblock!',
@@ -575,7 +588,9 @@ sub do_one_file($) {
 	if (!$filename) {
 		die "no filename given";
 	}
-	vprint(1,"$filename: Processing\n");
+        if ($option->{verbose}) {
+            print("$filename: Processing\n");
+        }
 
 	my $fh;
 	if ($filename =~ m/\.gz$/) {
